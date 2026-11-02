@@ -2,6 +2,7 @@ param(
     [int]$ThresholdMB = 1536,
     [int]$Interval = 2,
     [switch]$DisableTimer,
+    [switch]$DisableTrim,
     [switch]$PurgeNow,
     [switch]$Stats
 )
@@ -12,6 +13,7 @@ if (-not $isAdmin) {
     if ($ThresholdMB) { $argList += " -ThresholdMB $ThresholdMB" }
     if ($Interval) { $argList += " -Interval $Interval" }
     if ($DisableTimer) { $argList += " -DisableTimer" }
+    if ($DisableTrim) { $argList += " -DisableTrim" }
     if ($PurgeNow) { $argList += " -PurgeNow" }
     if ($Stats) { $argList += " -Stats" }
     Start-Process powershell.exe -ArgumentList $argList -Verb RunAs
@@ -20,6 +22,7 @@ if (-not $isAdmin) {
 
 Add-Type -TypeDefinition @"
 using System;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 public class NativeMemOps {
@@ -40,6 +43,15 @@ public class NativeMemOps {
 
     [DllImport("advapi32.dll", SetLastError = true)]
     public static extern bool AdjustTokenPrivileges(IntPtr TokenHandle, bool DisableAllPrivileges, ref TOKEN_PRIVILEGES NewState, int BufferLength, IntPtr PreviousState, IntPtr ReturnLength);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+    [DllImport("psapi.dll")]
+    public static extern bool EmptyWorkingSet(IntPtr hProcess);
 
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
     public struct TOKEN_PRIVILEGES {
@@ -64,9 +76,22 @@ public class NativeMemOps {
     [DllImport("kernel32.dll", SetLastError = true)]
     public static extern bool GlobalMemoryStatusEx(ref MEMORYSTATUSEX lpBuffer);
 
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr OpenProcess(uint processAccess, bool bInheritHandle, uint processId);
+
+    [DllImport("kernel32.dll")]
+    public static extern bool CloseHandle(IntPtr hObject);
+
+    [DllImport("kernel32.dll")]
+    public static extern bool SetPriorityClass(IntPtr hProcess, uint dwPriorityClass);
+
+    public static void BoostSelfPriority() {
+        SetPriorityClass(Process.GetCurrentProcess().Handle, 0x00000080);
+    }
+
     public static void EnablePrivilege(string privilege) {
         IntPtr hToken;
-        if (OpenProcessToken(System.Diagnostics.Process.GetCurrentProcess().Handle, 0x0028, out hToken)) {
+        if (OpenProcessToken(Process.GetCurrentProcess().Handle, 0x0028, out hToken)) {
             TOKEN_PRIVILEGES tp = new TOKEN_PRIVILEGES();
             tp.PrivilegeCount = 1;
             tp.Attributes = 0x00000002;
@@ -106,6 +131,31 @@ public class NativeMemOps {
         NtSetTimerResolution(5000, true, out cur);
     }
 
+    public static uint GetForegroundProcessId() {
+        IntPtr hwnd = GetForegroundWindow();
+        if (hwnd == IntPtr.Zero) return 0;
+        uint pid;
+        GetWindowThreadProcessId(hwnd, out pid);
+        return pid;
+    }
+
+    public static void TrimBackgroundBloat() {
+        uint fgPid = GetForegroundProcessId();
+        string[] targets = new string[] { "chrome", "msedge", "discord", "spotify", "steamwebhelper", "epicgameslauncher" };
+        foreach (string t in targets) {
+            Process[] procs = Process.GetProcessesByName(t);
+            foreach (Process p in procs) {
+                if (p.Id != fgPid && p.Id > 4) {
+                    IntPtr h = OpenProcess(0x0400 | 0x0100, false, (uint)p.Id);
+                    if (h != IntPtr.Zero) {
+                        EmptyWorkingSet(h);
+                        CloseHandle(h);
+                    }
+                }
+            }
+        }
+    }
+
     public static void FlushStandbyList() {
         EnablePrivilege("SeProfileSingleProcessPrivilege");
         EnablePrivilege("SeIncreaseQuotaPrivilege");
@@ -124,6 +174,8 @@ public class NativeMemOps {
 }
 "@
 
+[NativeMemOps]::BoostSelfPriority()
+
 if (-not $DisableTimer) {
     [NativeMemOps]::SetHighPrecisionTimer()
 }
@@ -132,16 +184,21 @@ if ($Stats) {
     $totalGb = [Math]::Round([NativeMemOps]::GetTotalPhysBytes() / 1GB, 2)
     $availGb = [Math]::Round([NativeMemOps]::GetAvailPhysBytes() / 1GB, 2)
     $timerMs = [Math]::Round([NativeMemOps]::GetCurrentTimerResolutionMs(), 3)
+    $fgPid = [NativeMemOps]::GetForegroundProcessId()
     Write-Host "Total Physical RAM: $totalGb GB"
     Write-Host "Available Physical RAM: $availGb GB"
     Write-Host "System Timer Resolution: $timerMs ms"
+    Write-Host "Active Foreground Process ID: $fgPid"
     exit 0
 }
 
 if ($PurgeNow) {
     [NativeMemOps]::FlushStandbyList()
+    if (-not $DisableTrim) {
+        [NativeMemOps]::TrimBackgroundBloat()
+    }
     $availGb = [Math]::Round([NativeMemOps]::GetAvailPhysBytes() / 1GB, 2)
-    Write-Host "Standby cache purged. Available RAM: $availGb GB"
+    Write-Host "Memory vacuumed. Available RAM: $availGb GB"
     exit 0
 }
 
@@ -154,6 +211,9 @@ while ($true) {
     if ($avail -gt 0 -and $avail -lt $thresholdBytes) {
         if (($now - $lastPurge).TotalSeconds -ge 10) {
             [NativeMemOps]::FlushStandbyList()
+            if (-not $DisableTrim) {
+                [NativeMemOps]::TrimBackgroundBloat()
+            }
             $lastPurge = $now
         }
     }
