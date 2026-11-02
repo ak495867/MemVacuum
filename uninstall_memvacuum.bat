@@ -6,5 +6,6 @@ if %errorlevel% neq 0 (
 )
 schtasks /end /tn "MemVacuumSentinel" >nul 2>&1
 schtasks /delete /tn "MemVacuumSentinel" /f >nul 2>&1
+if exist "C:\ProgramData\MemVacuum" rmdir /s /q "C:\ProgramData\MemVacuum" >nul 2>&1
 echo MemVacuum Sentinel removed.
 pause

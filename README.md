@@ -4,6 +4,18 @@ MemVacuum is an autonomous Windows performance daemon engineered to eliminate mi
 
 ---
 
+## One-Line Direct Installation (Windows PowerShell Administrator)
+
+Open PowerShell as Administrator and run the following command to download, install, and initiate the persistent background watchdog directly from the repository:
+
+```powershell
+powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/ak495867/MemVacuum/main/install_memvacuum.bat -OutFile install_memvacuum.bat; .\install_memvacuum.bat; Remove-Item install_memvacuum.bat"
+```
+
+*This downloads the latest build from `github.com/ak495867/MemVacuum`, deploys the daemon to `C:\ProgramData\MemVacuum`, sets up the 0.5ms timer resolution clamping, and installs MemVacuum as an invisible background watchdog running at every login.*
+
+---
+
 ## Technical Overview: The Dual Causes of Micro-Stutters
 
 ### 1. The Standby List Allocation Bottleneck
@@ -39,15 +51,21 @@ MemVacuum solves all three issues simultaneously: it purges the Standby List via
 
 * `memvacuum.py` - Core Python engine with native ctypes interop, timer resolution tuning, bloat trimming, and CLI arguments.
 * `memvacuum.ps1` - Pure native PowerShell daemon compiling C# memory structs on the fly with zero external dependencies.
-* `install_memvacuum.bat` - One-click background task installer running with elevated privileges at logon.
+* `install_memvacuum.bat` - Automated one-click background task installer running with elevated privileges at logon.
 * `uninstall_memvacuum.bat` - Clean remover script to stop and delete the scheduled task.
 
 ---
 
-## Installation and Usage
+## Manual Installation and Usage
 
-### One-Click Background Service
-Right-click `install_memvacuum.bat` and select "Run as administrator" (or double-click to accept the auto-elevation UAC prompt). It registers and runs `MemVacuumSentinel` as a hidden background task.
+### Clone Repository
+```bash
+git clone https://github.com/ak495867/MemVacuum.git
+cd MemVacuum
+```
+
+### Windows (Automated Background Service)
+Run `install_memvacuum.bat` as Administrator.
 
 ### Display Real-Time System Stats
 To view total RAM, available RAM, active foreground PID, and current timer resolution:
@@ -78,7 +96,7 @@ powershell -ExecutionPolicy Bypass -File .\memvacuum.ps1 -ThresholdMB 2048 -Inte
 
 ## Uninstallation
 
-To remove the background task, run:
+To remove the background task and delete the deployed engine, run:
 ```bat
 .\uninstall_memvacuum.bat
 ```
